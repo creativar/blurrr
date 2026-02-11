@@ -259,6 +259,18 @@ body {
   font-size: 14px;
 }
 
+.privacy-note a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.privacy-note a:hover { text-decoration: underline; }
+
+.modal a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.modal a:hover { text-decoration: underline; }
+
 /* About modal */
 .modal-overlay {
   position: fixed;

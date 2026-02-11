@@ -578,7 +578,7 @@ export default function App() {
               <div className="label">Drop an image file here</div>
               <div className="sub">or click to browse</div>
             </div>
-            <div className="privacy-note"><span className="lock">&#128274;</span> Your images never leave your device. All processing happens locally in your browser.</div>
+            <div className="privacy-note"><span className="lock">&#128274;</span> Your images never leave your device. All processing happens locally in your browser. <a href="https://github.com/creativar/blurrr" target="_blank" rel="noopener noreferrer">View source</a></div>
           </div>
         )}
         <canvas ref={canvasRef} style={{ display: loaded ? 'block' : 'none', touchAction: 'none' }}
@@ -622,6 +622,10 @@ export default function App() {
                 <li>Click a region to select it — drag to move, use handles to resize, or click the red button to delete</li>
                 <li>Save the result</li>
               </ol>
+            </div>
+            <div className="modal-section">
+              <h3>Source code</h3>
+              <p>blurrr is open source. <a href="https://github.com/creativar/blurrr" target="_blank" rel="noopener noreferrer">View the source on GitHub</a> to verify how your images are handled.</p>
             </div>
             <div className="modal-footer">
               <button className="primary" onClick={() => setShowAbout(false)}>Got it</button>
