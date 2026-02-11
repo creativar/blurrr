@@ -2,6 +2,14 @@
 
 A fast, private image redaction tool that runs entirely in your browser. No uploads, no servers — your images never leave your device.
 
+Don't want to host it yourself? **Use it here: [blurrr.it](https://blurrr.it/)**
+
+## Why blurrr?
+
+- **Private by design** — Your images are processed locally in your browser. Nothing is uploaded anywhere.
+- **No sign-up, no ads** — Just open the page and start redacting.
+- **Works offline** — Once loaded, no internet connection required.
+
 ## Features
 
 - **Blur, Redact, or Erase** — Gaussian blur, solid black redaction, or white erase
@@ -11,6 +19,13 @@ A fast, private image redaction tool that runs entirely in your browser. No uplo
 - **Image transforms** — Rotate, flip, and crop
 - **Undo/Redo** — Full history with keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z)
 - **Drag & drop** — Drop an image onto the page or click to browse
+
+## Use cases
+
+- Redact personal info from screenshots before sharing
+- Blur faces or license plates in photos
+- Clean up screenshots for bug reports or documentation
+- Censor sensitive data in images for social media
 
 ## Getting started
 
