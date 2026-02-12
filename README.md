@@ -48,6 +48,10 @@ Output goes to `dist/`.
 
 React 19, Vite, Canvas API. Zero backend.
 
+## Analytics
+
+blurrr uses [Plausible](https://plausible.io/), a privacy-friendly analytics tool, to track total page visits. No cookies, no personal data collected.
+
 ## License
 
 ISC
