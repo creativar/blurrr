@@ -73,7 +73,99 @@ function blurRegion(ctx, canvas, sx, sy, sw, sh, amount) {
   ctx.drawImage(tmp, 0, 0, tw, th, sx, sy, sw, sh)
 }
 
+// --- Brush helpers ---
+function getBrushBBox(r) {
+  if (!r.points || r.points.length === 0) return { x: 0, y: 0, w: 0, h: 0 }
+  const half = r.brushSize / 2
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of r.points) {
+    if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y
+    if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y
+  }
+  return { x: minX - half, y: minY - half, w: maxX - minX + r.brushSize, h: maxY - minY + r.brushSize }
+}
+
+function pointNearBrushPath(px, py, r) {
+  const half = r.brushSize / 2
+  for (let i = 0; i < r.points.length; i++) {
+    if (Math.hypot(px - r.points[i].x, py - r.points[i].y) <= half) return true
+    if (i > 0) {
+      const a = r.points[i - 1], b = r.points[i]
+      const dx = b.x - a.x, dy = b.y - a.y
+      const len2 = dx * dx + dy * dy
+      if (len2 === 0) continue
+      const t = Math.max(0, Math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / len2))
+      if (Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy)) <= half) return true
+    }
+  }
+  return false
+}
+
+function applyBrushEffect(ctx, canvas, r) {
+  if (!r.points || r.points.length < 1) return
+  const color = r.mode === 'redact' ? (r.color || '#000') : r.mode === 'erase' ? '#fff' : null
+  if (color) {
+    ctx.save()
+    ctx.strokeStyle = color
+    ctx.lineWidth = r.brushSize
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    ctx.moveTo(r.points[0].x, r.points[0].y)
+    for (let i = 1; i < r.points.length; i++) ctx.lineTo(r.points[i].x, r.points[i].y)
+    if (r.points.length === 1) ctx.lineTo(r.points[0].x + 0.1, r.points[0].y)
+    ctx.stroke()
+    ctx.restore()
+    return
+  }
+  // blur mode
+  const bbox = getBrushBBox(r)
+  const m = (r.blurAmount || 20) * 3
+  const sx = Math.max(0, Math.floor(bbox.x - m))
+  const sy = Math.max(0, Math.floor(bbox.y - m))
+  const ex = Math.min(canvas.width, Math.ceil(bbox.x + bbox.w + m))
+  const ey = Math.min(canvas.height, Math.ceil(bbox.y + bbox.h + m))
+  const sw = ex - sx, sh = ey - sy
+  if (sw < 1 || sh < 1) return
+  const tmp = document.createElement('canvas')
+  tmp.width = sw; tmp.height = sh
+  const tc = tmp.getContext('2d')
+  if (supportsFilter) {
+    tc.filter = `blur(${r.blurAmount}px)`
+    tc.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh)
+    tc.filter = 'none'
+  } else {
+    tc.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh)
+    blurRegion(tc, tmp, 0, 0, sw, sh, r.blurAmount)
+  }
+  const mask = document.createElement('canvas')
+  mask.width = sw; mask.height = sh
+  const mc = mask.getContext('2d')
+  mc.strokeStyle = '#fff'
+  mc.lineWidth = r.brushSize
+  mc.lineCap = 'round'
+  mc.lineJoin = 'round'
+  mc.beginPath()
+  mc.moveTo(r.points[0].x - sx, r.points[0].y - sy)
+  for (let i = 1; i < r.points.length; i++) mc.lineTo(r.points[i].x - sx, r.points[i].y - sy)
+  if (r.points.length === 1) mc.lineTo(r.points[0].x - sx + 0.1, r.points[0].y - sy)
+  mc.stroke()
+  tc.globalCompositeOperation = 'destination-in'
+  tc.drawImage(mask, 0, 0)
+  ctx.drawImage(tmp, 0, 0, sw, sh, sx, sy, sw, sh)
+  if (r.chunky) {
+    const tmp2 = document.createElement('canvas')
+    tmp2.width = sw; tmp2.height = sh
+    const t2c = tmp2.getContext('2d')
+    drawChunky(t2c, 0, 0, sw, sh, r.chunkSize, r.seed)
+    t2c.globalCompositeOperation = 'destination-in'
+    t2c.drawImage(mask, 0, 0)
+    ctx.drawImage(tmp2, 0, 0, sw, sh, sx, sy, sw, sh)
+  }
+}
+
 function applyEffect(ctx, canvas, r) {
+  if (r.type === 'brush') { applyBrushEffect(ctx, canvas, r); return }
   if (r.w < 2 || r.h < 2) return
   const angle = r.rotation || 0
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2
@@ -81,7 +173,7 @@ function applyEffect(ctx, canvas, r) {
   ctx.translate(cx, cy); ctx.rotate(angle)
   clipShape(ctx, r.shape, -r.w / 2, -r.h / 2, r.w, r.h)
   ctx.clip()
-  if (r.mode === 'redact') { ctx.fillStyle = '#000'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h) }
+  if (r.mode === 'redact') { ctx.fillStyle = r.color || '#000'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h) }
   else if (r.mode === 'erase') { ctx.fillStyle = '#fff'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h) }
   else if (supportsFilter) {
     ctx.rotate(-angle); ctx.translate(-cx, -cy)
@@ -177,6 +269,18 @@ function getDeletePos(region, hs) {
 }
 
 function drawHandlesUI(ctx, region, hs) {
+  if (region.type === 'brush') {
+    const bbox = getBrushBBox(region)
+    strokePreview(ctx, 'rect', bbox.x, bbox.y, bbox.w, bbox.h)
+    const del = { x: bbox.x + bbox.w + hs * 2, y: bbox.y - hs * 2 }
+    const dr = hs * 1.6
+    ctx.beginPath(); ctx.arc(del.x, del.y, dr, 0, Math.PI * 2); ctx.fillStyle = '#ef4444'; ctx.fill()
+    const cr = dr * 0.4
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = hs * 0.35
+    ctx.beginPath(); ctx.moveTo(del.x - cr, del.y - cr); ctx.lineTo(del.x + cr, del.y + cr)
+    ctx.moveTo(del.x + cr, del.y - cr); ctx.lineTo(del.x - cr, del.y + cr); ctx.stroke()
+    return
+  }
   const angle = region.rotation || 0
   const cx = region.x + region.w / 2, cy = region.y + region.h / 2
   // Rotated outline
@@ -225,6 +329,8 @@ export default function App() {
   const [chunky, setChunky] = useState(false)
   const [chunkSize, setChunkSize] = useState(16)
   const [shape, setShape] = useState('rect')
+  const [brushSize, setBrushSize] = useState(20)
+  const [redactColor, setRedactColor] = useState('#000000')
   const [showAbout, setShowAbout] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedId, _setSelectedId] = useState(null)
@@ -260,7 +366,7 @@ export default function App() {
       for (const r of regionsRef.current) applyEffect(ctx, canvas, r)
       if (previewRegion) {
         applyEffect(ctx, canvas, previewRegion)
-        if (showUI) strokePreview(ctx, previewRegion.shape, previewRegion.x, previewRegion.y, previewRegion.w, previewRegion.h)
+        if (showUI && previewRegion.type !== 'brush') strokePreview(ctx, previewRegion.shape, previewRegion.x, previewRegion.y, previewRegion.w, previewRegion.h)
       }
     }
     if (showUI && selectedIdRef.current && !showOriginal) {
@@ -344,7 +450,11 @@ export default function App() {
         e.preventDefault()
         commitRegions(regionsRef.current.filter(r => r.id !== selectedIdRef.current))
         setSelectedId(null)
-      } else if (e.key === 'Escape') {
+      } else if (e.key === 'b' && document.activeElement === document.body) { setMode('blur') }
+      else if (e.key === 'r' && document.activeElement === document.body) { setMode('redact') }
+      else if (e.key === 'e' && document.activeElement === document.body) { setMode('erase') }
+      else if (e.key === 'p' && document.activeElement === document.body) { setMode('brush') }
+      else if (e.key === 'Escape') {
         if (croppingRef.current) { cropRef.current = null; setCropping(false); forceUpdate(n => n + 1) }
         setSelectedId(null)
       } else if (e.key === 'Alt') {
@@ -449,39 +559,55 @@ export default function App() {
     // Check selected region's delete button, rotation handle, and resize handles
     const selReg = selectedIdRef.current ? regionsRef.current.find(r => r.id === selectedIdRef.current) : null
     if (selReg) {
-      const del = getDeletePos(selReg, hs)
+      const del = selReg.type === 'brush'
+        ? (() => { const bb = getBrushBBox(selReg); return { x: bb.x + bb.w + hs * 2, y: bb.y - hs * 2 } })()
+        : getDeletePos(selReg, hs)
       if (Math.hypot(pos.x - del.x, pos.y - del.y) < hs * 2.4) {
         commitRegions(regionsRef.current.filter(r => r.id !== selReg.id))
         setSelectedId(null); return
       }
-      const rh = getRotHandlePos(selReg, hs)
-      if (Math.hypot(pos.x - rh.x, pos.y - rh.y) < thr) {
-        const rcx = selReg.x + selReg.w / 2, rcy = selReg.y + selReg.h / 2
-        dragRef.current = { type: 'rotating', regionId: selReg.id, startAngle: Math.atan2(pos.y - rcy, pos.x - rcx), origRotation: selReg.rotation || 0 }
-        attachDrag(); return
+      if (selReg.type !== 'brush') {
+        const rh = getRotHandlePos(selReg, hs)
+        if (Math.hypot(pos.x - rh.x, pos.y - rh.y) < thr) {
+          const rcx = selReg.x + selReg.w / 2, rcy = selReg.y + selReg.h / 2
+          dragRef.current = { type: 'rotating', regionId: selReg.id, startAngle: Math.atan2(pos.y - rcy, pos.x - rcx), origRotation: selReg.rotation || 0 }
+          attachDrag(); return
+        }
+        const handles = getHandles(selReg)
+        for (const [key, hp] of Object.entries(handles)) {
+          if (Math.abs(pos.x - hp.x) < thr && Math.abs(pos.y - hp.y) < thr) {
+            dragRef.current = { type: 'resizing', regionId: selReg.id, ...getResizeInfo(key, selReg) }
+            attachDrag(); return
+          }
+        }
       }
-      const handles = getHandles(selReg)
-      for (const [key, hp] of Object.entries(handles)) {
-        if (Math.abs(pos.x - hp.x) < thr && Math.abs(pos.y - hp.y) < thr) {
-          dragRef.current = { type: 'resizing', regionId: selReg.id, ...getResizeInfo(key, selReg) }
+    }
+    // Check if clicking inside any region
+    for (let i = regionsRef.current.length - 1; i >= 0; i--) {
+      const r = regionsRef.current[i]
+      if (r.type === 'brush') {
+        if (pointNearBrushPath(pos.x, pos.y, r)) {
+          setSelectedId(r.id)
+          dragRef.current = { type: 'moving', regionId: r.id, lastX: pos.x, lastY: pos.y }
+          attachDrag(); return
+        }
+      } else {
+        const rcx = r.x + r.w / 2, rcy = r.y + r.h / 2
+        const lp = rotPt(pos.x, pos.y, rcx, rcy, -(r.rotation || 0))
+        if (lp.x >= r.x && lp.x <= r.x + r.w && lp.y >= r.y && lp.y <= r.y + r.h) {
+          setSelectedId(r.id)
+          dragRef.current = { type: 'moving', regionId: r.id, ox: pos.x - r.x, oy: pos.y - r.y }
           attachDrag(); return
         }
       }
     }
-    // Check if clicking inside any region (using local-space hit test)
-    for (let i = regionsRef.current.length - 1; i >= 0; i--) {
-      const r = regionsRef.current[i]
-      const rcx = r.x + r.w / 2, rcy = r.y + r.h / 2
-      const lp = rotPt(pos.x, pos.y, rcx, rcy, -(r.rotation || 0))
-      if (lp.x >= r.x && lp.x <= r.x + r.w && lp.y >= r.y && lp.y <= r.y + r.h) {
-        setSelectedId(r.id)
-        dragRef.current = { type: 'moving', regionId: r.id, ox: pos.x - r.x, oy: pos.y - r.y }
-        attachDrag(); return
-      }
-    }
     // Start drawing new region
     setSelectedId(null)
-    dragRef.current = { type: 'drawing', sx: pos.x, sy: pos.y, seed: Math.floor(Math.random() * 2 ** 32), mode, shape, blurAmount, chunky, chunkSize }
+    if (mode === 'brush') {
+      dragRef.current = { type: 'brushing', points: [pos], mode: 'redact', brushSize, blurAmount, chunky, chunkSize, color: redactColor, seed: Math.floor(Math.random() * 2 ** 32) }
+    } else {
+      dragRef.current = { type: 'drawing', sx: pos.x, sy: pos.y, seed: Math.floor(Math.random() * 2 ** 32), mode, shape, blurAmount, chunky, chunkSize, color: redactColor }
+    }
     attachDrag()
   }
 
@@ -492,7 +618,10 @@ export default function App() {
         cropRef.current = { x: Math.min(drag.sx, pos.x), y: Math.min(drag.sy, pos.y), w: Math.abs(pos.x - drag.sx), h: Math.abs(pos.y - drag.sy) }
         render()
       } else if (drag.type === 'drawing') {
-        render({ previewRegion: { id: '_p', x: Math.min(drag.sx, pos.x), y: Math.min(drag.sy, pos.y), w: Math.abs(pos.x - drag.sx), h: Math.abs(pos.y - drag.sy), mode: drag.mode, shape: drag.shape, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed } })
+        render({ previewRegion: { id: '_p', x: Math.min(drag.sx, pos.x), y: Math.min(drag.sy, pos.y), w: Math.abs(pos.x - drag.sx), h: Math.abs(pos.y - drag.sy), mode: drag.mode, shape: drag.shape, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed, color: drag.color } })
+      } else if (drag.type === 'brushing') {
+        drag.points.push(pos)
+        render({ previewRegion: { id: '_bp', type: 'brush', points: drag.points, brushSize: drag.brushSize, mode: drag.mode, color: drag.color, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed } })
       } else if (drag.type === 'rotating') {
         const reg = regionsRef.current.find(r => r.id === drag.regionId)
         if (reg) {
@@ -503,7 +632,16 @@ export default function App() {
         }
       } else if (drag.type === 'moving') {
         const reg = regionsRef.current.find(r => r.id === drag.regionId)
-        if (reg) { reg.x = pos.x - drag.ox; reg.y = pos.y - drag.oy; render() }
+        if (reg) {
+          if (reg.type === 'brush') {
+            const dx = pos.x - drag.lastX, dy = pos.y - drag.lastY
+            for (const p of reg.points) { p.x += dx; p.y += dy }
+            drag.lastX = pos.x; drag.lastY = pos.y
+          } else {
+            reg.x = pos.x - drag.ox; reg.y = pos.y - drag.oy
+          }
+          render()
+        }
       } else if (drag.type === 'resizing') {
         const reg = regionsRef.current.find(r => r.id === drag.regionId)
         if (reg) {
@@ -527,11 +665,16 @@ export default function App() {
         const crop = { x: Math.min(drag.sx, pos.x), y: Math.min(drag.sy, pos.y), w: Math.abs(pos.x - drag.sx), h: Math.abs(pos.y - drag.sy) }
         if (crop.w >= 4 && crop.h >= 4) { cropRef.current = crop; forceUpdate(n => n + 1) }
         else { cropRef.current = null }
+      } else if (drag.type === 'brushing') {
+        if (drag.points.length >= 1) {
+          const nr = { id: String(nextId++), type: 'brush', points: [...drag.points], brushSize: drag.brushSize, mode: drag.mode, color: drag.color, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed, rotation: 0 }
+          commitRegions([...regionsRef.current, nr]); setSelectedId(nr.id)
+        }
       } else if (drag.type === 'drawing') {
         const pos = getCoords(e)
         const x = Math.min(drag.sx, pos.x), y = Math.min(drag.sy, pos.y), w = Math.abs(pos.x - drag.sx), h = Math.abs(pos.y - drag.sy)
         if (w >= 4 && h >= 4) {
-          const nr = { id: String(nextId++), x, y, w, h, mode: drag.mode, shape: drag.shape, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed, rotation: 0 }
+          const nr = { id: String(nextId++), x, y, w, h, mode: drag.mode, shape: drag.shape, blurAmount: drag.blurAmount, chunky: drag.chunky, chunkSize: drag.chunkSize, seed: drag.seed, rotation: 0, color: drag.color }
           commitRegions([...regionsRef.current, nr]); setSelectedId(nr.id)
         }
       } else if (drag.type === 'moving' || drag.type === 'resizing' || drag.type === 'rotating') {
@@ -557,20 +700,28 @@ export default function App() {
     const canvas = canvasRef.current, pos = getCoords(e), scale = getScale(), hs = 6 * scale, thr = hs * 1.5
     const selReg = selectedIdRef.current ? regionsRef.current.find(r => r.id === selectedIdRef.current) : null
     if (selReg) {
-      const del = getDeletePos(selReg, hs)
+      const del = selReg.type === 'brush'
+        ? (() => { const bb = getBrushBBox(selReg); return { x: bb.x + bb.w + hs * 2, y: bb.y - hs * 2 } })()
+        : getDeletePos(selReg, hs)
       if (Math.hypot(pos.x - del.x, pos.y - del.y) < hs * 2.4) { canvas.style.cursor = 'pointer'; return }
-      const rh = getRotHandlePos(selReg, hs)
-      if (Math.hypot(pos.x - rh.x, pos.y - rh.y) < thr) { canvas.style.cursor = 'grab'; return }
-      const handles = getHandles(selReg)
-      for (const [key, hp] of Object.entries(handles)) {
-        if (Math.abs(pos.x - hp.x) < thr && Math.abs(pos.y - hp.y) < thr) { canvas.style.cursor = CURSORS[key]; return }
+      if (selReg.type !== 'brush') {
+        const rh = getRotHandlePos(selReg, hs)
+        if (Math.hypot(pos.x - rh.x, pos.y - rh.y) < thr) { canvas.style.cursor = 'grab'; return }
+        const handles = getHandles(selReg)
+        for (const [key, hp] of Object.entries(handles)) {
+          if (Math.abs(pos.x - hp.x) < thr && Math.abs(pos.y - hp.y) < thr) { canvas.style.cursor = CURSORS[key]; return }
+        }
       }
     }
     for (let i = regionsRef.current.length - 1; i >= 0; i--) {
       const r = regionsRef.current[i]
-      const rcx = r.x + r.w / 2, rcy = r.y + r.h / 2
-      const lp = rotPt(pos.x, pos.y, rcx, rcy, -(r.rotation || 0))
-      if (lp.x >= r.x && lp.x <= r.x + r.w && lp.y >= r.y && lp.y <= r.y + r.h) { canvas.style.cursor = 'move'; return }
+      if (r.type === 'brush') {
+        if (pointNearBrushPath(pos.x, pos.y, r)) { canvas.style.cursor = 'move'; return }
+      } else {
+        const rcx = r.x + r.w / 2, rcy = r.y + r.h / 2
+        const lp = rotPt(pos.x, pos.y, rcx, rcy, -(r.rotation || 0))
+        if (lp.x >= r.x && lp.x <= r.x + r.w && lp.y >= r.y && lp.y <= r.y + r.h) { canvas.style.cursor = 'move'; return }
+      }
     }
     canvas.style.cursor = 'crosshair'
   }
@@ -690,7 +841,7 @@ export default function App() {
         id: String(nextId++),
         x: b.x - b.w * 0.1, y: b.y - b.h * 0.1,
         w: b.w * 1.2, h: b.h * 1.2,
-        mode, shape, blurAmount, chunky, chunkSize, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
+        mode, shape, blurAmount, chunky, chunkSize, color: redactColor, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
       }))
       commitRegions([...regionsRef.current, ...newRegions])
       showDetectMsg(`${allBoxes.length} face${allBoxes.length > 1 ? 's' : ''} found`)
@@ -729,7 +880,7 @@ export default function App() {
           id: String(nextId++),
           x: b.x0 - pad, y: b.y0 - pad,
           w: b.x1 - b.x0 + pad * 2, h: b.y1 - b.y0 + pad * 2,
-          mode, shape, blurAmount, chunky, chunkSize, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
+          mode, shape, blurAmount, chunky, chunkSize, color: redactColor, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
         }
       })
       commitRegions([...regionsRef.current, ...newRegions])
@@ -753,15 +904,16 @@ export default function App() {
               <option value="blur">Blur</option>
               <option value="redact">Redact</option>
               <option value="erase">Erase</option>
+              <option value="brush">Brush</option>
             </select>
           </div>
-          <div className="toolbar-dropdown">
+          {mode !== 'brush' && <div className="toolbar-dropdown">
             <select value={shape} onChange={(e) => setShape(e.target.value)}>
               <option value="rect">Rectangle</option>
               <option value="rounded">Rounded</option>
               <option value="ellipse">Ellipse</option>
             </select>
-          </div>
+          </div>}
           <div className="toolbar-dropdown">
             {detecting && <span className="spinner" />}
             <select disabled={!loaded || !!detecting} value="" onChange={(e) => {
@@ -789,6 +941,18 @@ export default function App() {
                 <label>Strength: <input type="range" min="5" max="60" value={blurAmount} onChange={(e) => setBlurAmount(Number(e.target.value))} /> <span>{blurAmount}px</span></label>
                 <label className="checkbox-label"><input type="checkbox" checked={chunky} onChange={(e) => setChunky(e.target.checked)} /> Chunky</label>
                 {chunky && <label>Size: <input type="range" min="4" max="48" value={chunkSize} onChange={(e) => setChunkSize(Number(e.target.value))} /> <span>{chunkSize}px</span></label>}
+                <div className="sep" />
+              </>
+            )}
+            {(mode === 'redact' || mode === 'brush') && (
+              <>
+                <label className="color-picker">Color: <input type="color" value={redactColor} onChange={(e) => setRedactColor(e.target.value)} /></label>
+                <div className="sep" />
+              </>
+            )}
+            {mode === 'brush' && (
+              <>
+                <label>Brush: <input type="range" min="4" max="100" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /> <span>{brushSize}px</span></label>
                 <div className="sep" />
               </>
             )}
