@@ -233,8 +233,14 @@ export default function App() {
   const cropRef = useRef(null)
   const [, forceUpdate] = useState(0)
   const [hasFaceDetector, setHasFaceDetector] = useState(typeof window.FaceDetector === 'function')
-  const [detecting, setDetecting] = useState(null) // 'faces' | 'text' | null
+  const [detecting, setDetecting] = useState(null) // 'faces' | 'text' | 'plates' | null
   const [detectMsg, setDetectMsg] = useState(null)
+  const detectTimerRef = useRef(null)
+  const showDetectMsg = (msg) => {
+    clearTimeout(detectTimerRef.current)
+    setDetectMsg(msg)
+    if (msg) detectTimerRef.current = setTimeout(() => setDetectMsg(null), 2000)
+  }
   const showOriginalRef = useRef(false)
 
   const setSelectedId = (id) => { selectedIdRef.current = id; _setSelectedId(id) }
@@ -322,6 +328,7 @@ export default function App() {
       try { new window.FaceDetector(); setHasFaceDetector(true) } catch { /* not supported */ }
     }
   }, [])
+
 
   // Render after every React update
   useEffect(() => { if (loaded) render() })
@@ -635,7 +642,7 @@ export default function App() {
   const detectFaces = async () => {
     if (!imgRef.current || detecting) return
     if (!hasFaceDetector) {
-      setDetectMsg('Enable chrome://flags/#enable-experimental-web-platform-features and restart Chrome')
+      showDetectMsg('Enable chrome://flags/#enable-experimental-web-platform-features and restart Chrome')
       return
     }
     setDetecting('faces'); setDetectMsg(null)
@@ -676,7 +683,7 @@ export default function App() {
           }
         }
       }
-      if (allBoxes.length === 0) { setDetectMsg('No faces found'); setDetecting(null); return }
+      if (allBoxes.length === 0) { showDetectMsg('No faces found'); setDetecting(null); return }
       const newRegions = allBoxes.map(b => ({
         id: String(nextId++),
         x: b.x - b.w * 0.1, y: b.y - b.h * 0.1,
@@ -684,9 +691,9 @@ export default function App() {
         mode, shape, blurAmount, chunky, chunkSize, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
       }))
       commitRegions([...regionsRef.current, ...newRegions])
-      setDetectMsg(`${allBoxes.length} face${allBoxes.length > 1 ? 's' : ''} found`)
+      showDetectMsg(`${allBoxes.length} face${allBoxes.length > 1 ? 's' : ''} found`)
     } catch (err) {
-      setDetectMsg('Face detection failed')
+      showDetectMsg('Face detection failed')
     }
     setDetecting(null)
   }
@@ -712,7 +719,7 @@ export default function App() {
               words.push(word)
       const emailRegex = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/
       const matches = words.filter(w => emailRegex.test(w.text))
-      if (matches.length === 0) { setDetectMsg('No emails found'); setDetecting(null); return }
+      if (matches.length === 0) { showDetectMsg('No emails found'); setDetecting(null); return }
       const newRegions = matches.map(w => {
         const b = w.bbox
         const pad = 4
@@ -724,13 +731,14 @@ export default function App() {
         }
       })
       commitRegions([...regionsRef.current, ...newRegions])
-      setDetectMsg(`${matches.length} email${matches.length > 1 ? 's' : ''} found`)
+      showDetectMsg(`${matches.length} email${matches.length > 1 ? 's' : ''} found`)
     } catch (err) {
       console.error('Tesseract OCR error:', err)
-      setDetectMsg('Text detection failed')
+      showDetectMsg('Text detection failed')
     }
     setDetecting(null)
   }
+
 
   return (
     <>
@@ -797,14 +805,18 @@ export default function App() {
               </>
             )}
             <div className="sep" />
-            <button onClick={detectFaces} disabled={!loaded || !!detecting} title="Auto-detect faces" className={detecting === 'faces' ? 'detecting' : ''}>
-              {detecting === 'faces' && <span className="spinner" />}
-              {detecting === 'faces' ? 'Detecting...' : 'Detect Faces'}
-            </button>
-            <button onClick={detectText} disabled={!loaded || !!detecting} title="Auto-detect email addresses (OCR)" className={detecting === 'text' ? 'detecting' : ''}>
-              {detecting === 'text' && <span className="spinner" />}
-              {detecting === 'text' ? 'Scanning...' : 'Detect Emails'}
-            </button>
+            <div className="toolbar-dropdown">
+              {detecting && <span className="spinner" />}
+              <select disabled={!loaded || !!detecting} value="" onChange={(e) => {
+                const v = e.target.value; e.target.value = ''
+                if (v === 'faces') detectFaces()
+                else if (v === 'emails') detectText()
+              }}>
+                <option value="" disabled>{detecting ? 'Scanning...' : 'Auto Detect'}</option>
+                <option value="faces">Detect Faces</option>
+                <option value="emails">Detect Emails</option>
+              </select>
+            </div>
             <button
               disabled={!loaded || regionsRef.current.length === 0}
               title="Show original (hold Alt)"
