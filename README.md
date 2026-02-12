@@ -56,7 +56,17 @@ React 19, Vite, Canvas API, Tesseract.js (lazy-loaded). Zero backend.
 
 ## Analytics
 
-blurrr uses [Plausible](https://plausible.io/), a privacy-friendly analytics tool, to track total page visits. No cookies, no personal data collected.
+blurrr uses [Plausible](https://plausible.io/), a privacy-friendly analytics tool, to track page visits and image saves. No cookies, no personal data collected.
+
+Analytics is configured via the `VITE_PLAUSIBLE_DOMAIN` environment variable. If not set, analytics is disabled. To use your own Plausible domain, create a `.env` file:
+
+```
+VITE_PLAUSIBLE_DOMAIN=yourdomain.com
+```
+
+Or set it in your hosting provider's environment variables (e.g. Cloudflare Pages).
+
+A custom event `Image Saved` is sent when a user saves an image. To track this in Plausible, add a custom goal: Settings > Goals > Add Goal > Custom Event > `Image Saved`.
 
 ## License
 

@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react'
+import { track } from './analytics'
 
 let nextId = 1
 
@@ -579,6 +580,7 @@ export default function App() {
     render({ showUI: false })
     const a = document.createElement('a'); a.download = fileName; a.href = canvasRef.current.toDataURL('image/png'); a.click()
     selectedIdRef.current = prev; render()
+    track('Image Saved', { props: { regions: String(regionsRef.current.length) } })
   }
 
   const clear = () => { regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; imageStackRef.current = []; setSelectedId(null); setDetectMsg(null); forceUpdate(n => n + 1) }
