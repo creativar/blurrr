@@ -38,6 +38,40 @@ function drawChunky(ctx, x, y, w, h, blockSize, seed) {
   }
 }
 
+// Detect ctx.filter support (Safari < 17.2 doesn't have it)
+const supportsFilter = (() => {
+  try {
+    const c = document.createElement('canvas').getContext('2d')
+    c.filter = 'blur(1px)'
+    return c.filter === 'blur(1px)'
+  } catch { return false }
+})()
+
+// Fallback blur via repeated downscale/upscale (works everywhere)
+function blurRegion(ctx, canvas, sx, sy, sw, sh, amount) {
+  if (sw < 1 || sh < 1) return
+  sx = Math.max(0, Math.round(sx)); sy = Math.max(0, Math.round(sy))
+  sw = Math.min(Math.round(sw), canvas.width - sx); sh = Math.min(Math.round(sh), canvas.height - sy)
+  if (sw < 1 || sh < 1) return
+  const steps = Math.max(2, Math.ceil(amount / 4))
+  const scale = Math.max(1, Math.round(amount / 2))
+  const tw = Math.max(1, Math.ceil(sw / scale)), th = Math.max(1, Math.ceil(sh / scale))
+  const tmp = document.createElement('canvas')
+  tmp.width = tw; tmp.height = th
+  const tc = tmp.getContext('2d')
+  tc.drawImage(canvas, sx, sy, sw, sh, 0, 0, tw, th)
+  // Multiple passes of down/up for smoother blur
+  for (let i = 1; i < steps; i++) {
+    const s = Math.max(1, Math.ceil(tw / 2)), t = Math.max(1, Math.ceil(th / 2))
+    const tmp2 = document.createElement('canvas')
+    tmp2.width = s; tmp2.height = t
+    tmp2.getContext('2d').drawImage(tmp, 0, 0, s, t)
+    tc.clearRect(0, 0, tw, th)
+    tc.drawImage(tmp2, 0, 0, tw, th)
+  }
+  ctx.drawImage(tmp, 0, 0, tw, th, sx, sy, sw, sh)
+}
+
 function applyEffect(ctx, canvas, r) {
   if (r.w < 2 || r.h < 2) return
   const angle = r.rotation || 0
@@ -48,7 +82,7 @@ function applyEffect(ctx, canvas, r) {
   ctx.clip()
   if (r.mode === 'redact') { ctx.fillStyle = '#000'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h) }
   else if (r.mode === 'erase') { ctx.fillStyle = '#fff'; ctx.fillRect(-r.w / 2, -r.h / 2, r.w, r.h) }
-  else {
+  else if (supportsFilter) {
     ctx.rotate(-angle); ctx.translate(-cx, -cy)
     ctx.filter = `blur(${r.blurAmount}px)`
     const m = r.blurAmount * 3
@@ -59,6 +93,17 @@ function applyEffect(ctx, canvas, r) {
     const minX = Math.min(...xs) - m, minY = Math.min(...ys) - m
     const maxX = Math.max(...xs) + m, maxY = Math.max(...ys) + m
     ctx.drawImage(canvas, minX, minY, maxX - minX, maxY - minY, minX, minY, maxX - minX, maxY - minY)
+  } else {
+    // Fallback: downscale blur for browsers without ctx.filter
+    ctx.rotate(-angle); ctx.translate(-cx, -cy)
+    const m = r.blurAmount * 2
+    const cos = Math.cos(angle), sin = Math.sin(angle)
+    const corners = [[-r.w / 2, -r.h / 2], [r.w / 2, -r.h / 2], [r.w / 2, r.h / 2], [-r.w / 2, r.h / 2]]
+    const xs = corners.map(([lx, ly]) => cx + lx * cos - ly * sin)
+    const ys = corners.map(([lx, ly]) => cy + lx * sin + ly * cos)
+    const minX = Math.min(...xs) - m, minY = Math.min(...ys) - m
+    const maxX = Math.max(...xs) + m, maxY = Math.max(...ys) + m
+    blurRegion(ctx, canvas, minX, minY, maxX - minX, maxY - minY, r.blurAmount)
   }
   ctx.restore()
   if (r.mode === 'blur' && r.chunky) {
@@ -169,6 +214,7 @@ export default function App() {
   const dragRef = useRef({ type: 'none' })
   const historyRef = useRef([[]])
   const indexRef = useRef(0)
+  const imageStackRef = useRef([]) // stores {img, regions, history, index} before destructive ops
 
   const [loaded, setLoaded] = useState(false)
   const [blurAmount, setBlurAmount] = useState(20)
@@ -186,6 +232,10 @@ export default function App() {
   const setCropping = (v) => { croppingRef.current = v; _setCropping(v) }
   const cropRef = useRef(null)
   const [, forceUpdate] = useState(0)
+  const [hasFaceDetector, setHasFaceDetector] = useState(typeof window.FaceDetector === 'function')
+  const [detecting, setDetecting] = useState(null) // 'faces' | 'text' | null
+  const [detectMsg, setDetectMsg] = useState(null)
+  const showOriginalRef = useRef(false)
 
   const setSelectedId = (id) => { selectedIdRef.current = id; _setSelectedId(id) }
   const getScale = () => { const c = canvasRef.current; if (!c) return 1; const r = c.getBoundingClientRect(); return c.width / (r.width || 1) }
@@ -196,21 +246,23 @@ export default function App() {
     const canvas = canvasRef.current, img = imgRef.current
     if (!canvas || !img) return
     const ctx = canvas.getContext('2d')
-    const { showUI = true, previewRegion } = opts
+    const { showUI = true, previewRegion, showOriginal = false } = opts
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.drawImage(img, 0, 0)
-    for (const r of regionsRef.current) applyEffect(ctx, canvas, r)
-    if (previewRegion) {
-      applyEffect(ctx, canvas, previewRegion)
-      if (showUI) strokePreview(ctx, previewRegion.shape, previewRegion.x, previewRegion.y, previewRegion.w, previewRegion.h)
+    if (!showOriginal) {
+      for (const r of regionsRef.current) applyEffect(ctx, canvas, r)
+      if (previewRegion) {
+        applyEffect(ctx, canvas, previewRegion)
+        if (showUI) strokePreview(ctx, previewRegion.shape, previewRegion.x, previewRegion.y, previewRegion.w, previewRegion.h)
+      }
     }
-    if (showUI && selectedIdRef.current) {
+    if (showUI && selectedIdRef.current && !showOriginal) {
       const sel = regionsRef.current.find(r => r.id === selectedIdRef.current)
       if (sel) drawHandlesUI(ctx, sel, 6 * getScale())
     }
     // Crop overlay
     const crop = cropRef.current
-    if (showUI && crop) {
+    if (showUI && crop && !showOriginal) {
       ctx.fillStyle = 'rgba(0,0,0,0.55)'
       ctx.fillRect(0, 0, canvas.width, crop.y)
       ctx.fillRect(0, crop.y, crop.x, crop.h)
@@ -218,6 +270,12 @@ export default function App() {
       ctx.fillRect(0, crop.y + crop.h, canvas.width, canvas.height - crop.y - crop.h)
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2 * getScale(); ctx.setLineDash([])
       ctx.strokeRect(crop.x, crop.y, crop.w, crop.h)
+    }
+    // "Original" badge
+    if (showOriginal && showUI) {
+      const s = getScale()
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(8 * s, 8 * s, 80 * s, 28 * s)
+      ctx.fillStyle = '#fff'; ctx.font = `${14 * s}px Inter, sans-serif`; ctx.fillText('Original', 16 * s, 27 * s)
     }
   }
 
@@ -230,19 +288,50 @@ export default function App() {
     regionsRef.current = regs
     forceUpdate(n => n + 1)
   }
-  const canUndo = () => indexRef.current > 0
+  const saveImageState = () => {
+    imageStackRef.current.push({
+      img: imgRef.current,
+      regions: structuredClone(regionsRef.current),
+      history: structuredClone(historyRef.current),
+      index: indexRef.current,
+    })
+    if (imageStackRef.current.length > 20) imageStackRef.current.shift()
+  }
+  const canUndo = () => indexRef.current > 0 || imageStackRef.current.length > 0
   const canRedo = () => indexRef.current < historyRef.current.length - 1
-  const undo = () => { if (!canUndo()) return; indexRef.current--; regionsRef.current = structuredClone(historyRef.current[indexRef.current]); setSelectedId(null); forceUpdate(n => n + 1) }
+  const undo = () => {
+    if (indexRef.current > 0) {
+      indexRef.current--; regionsRef.current = structuredClone(historyRef.current[indexRef.current]); setSelectedId(null); forceUpdate(n => n + 1)
+    } else if (imageStackRef.current.length > 0) {
+      const prev = imageStackRef.current.pop()
+      imgRef.current = prev.img
+      const canvas = canvasRef.current
+      canvas.width = prev.img.width; canvas.height = prev.img.height
+      regionsRef.current = prev.regions
+      historyRef.current = prev.history
+      indexRef.current = prev.index
+      setSelectedId(null); setCropping(false); cropRef.current = null
+      forceUpdate(n => n + 1); setTimeout(fitCanvas, 0)
+    }
+  }
   const redo = () => { if (!canRedo()) return; indexRef.current++; regionsRef.current = structuredClone(historyRef.current[indexRef.current]); setSelectedId(null); forceUpdate(n => n + 1) }
+
+  // Check FaceDetector support
+  useEffect(() => {
+    if (typeof window.FaceDetector === 'function') {
+      try { new window.FaceDetector(); setHasFaceDetector(true) } catch { /* not supported */ }
+    }
+  }, [])
 
   // Render after every React update
   useEffect(() => { if (loaded) render() })
 
   // Keyboard
   useEffect(() => {
-    const handler = (e) => {
+    const handleKeyDown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') { e.preventDefault(); redo() }
       else if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo() }
+      else if ((e.ctrlKey || e.metaKey) && e.key === 'v') { handleClipboardPaste() }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdRef.current && document.activeElement === document.body) {
         e.preventDefault()
         commitRegions(regionsRef.current.filter(r => r.id !== selectedIdRef.current))
@@ -250,11 +339,53 @@ export default function App() {
       } else if (e.key === 'Escape') {
         if (croppingRef.current) { cropRef.current = null; setCropping(false); forceUpdate(n => n + 1) }
         setSelectedId(null)
+      } else if (e.key === 'Alt') {
+        e.preventDefault()
+        if (imgRef.current && regionsRef.current.length > 0) {
+          showOriginalRef.current = true; render({ showOriginal: true })
+        }
       }
     }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
+    const handleKeyUp = (e) => {
+      if (e.key === 'Alt' && showOriginalRef.current) {
+        showOriginalRef.current = false; render()
+      }
+    }
+    const handlePaste = (e) => {
+      const items = e.clipboardData?.items
+      if (!items) return
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault()
+          const blob = item.getAsFile()
+          if (blob) loadFile(new File([blob], 'pasted.png', { type: blob.type }))
+          return
+        }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('keyup', handleKeyUp)
+    document.addEventListener('paste', handlePaste)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('keyup', handleKeyUp)
+      document.removeEventListener('paste', handlePaste)
+    }
   }, [])
+
+  const handleClipboardPaste = async () => {
+    try {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const imgType = item.types.find(t => t.startsWith('image/'))
+        if (imgType) {
+          const blob = await item.getType(imgType)
+          loadFile(new File([blob], 'pasted.png', { type: imgType }))
+          return
+        }
+      }
+    } catch { /* clipboard API may not be available, fallback paste event handles it */ }
+  }
 
   // Resize
   useEffect(() => {
@@ -287,8 +418,8 @@ export default function App() {
         const canvas = canvasRef.current
         canvas.width = img.width; canvas.height = img.height
         regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; nextId = 1
-        setSelectedId(null); setLoaded(true)
-        setTimeout(fitCanvas, 0)
+        setSelectedId(null); setLoaded(true); setDetectMsg(null)
+        forceUpdate(n => n + 1); setTimeout(fitCanvas, 0)
       }
       img.src = ev.target.result
     }
@@ -443,11 +574,12 @@ export default function App() {
     selectedIdRef.current = prev; render()
   }
 
-  const clear = () => { regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; setSelectedId(null); forceUpdate(n => n + 1) }
-  const removeImage = () => { setLoaded(false); imgRef.current = null; regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; setSelectedId(null); setCropping(false); cropRef.current = null; forceUpdate(n => n + 1) }
+  const clear = () => { regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; imageStackRef.current = []; setSelectedId(null); setDetectMsg(null); forceUpdate(n => n + 1) }
+  const removeImage = () => { setLoaded(false); imgRef.current = null; regionsRef.current = []; historyRef.current = [[]]; indexRef.current = 0; imageStackRef.current = []; setSelectedId(null); setCropping(false); cropRef.current = null; setDetectMsg(null); forceUpdate(n => n + 1) }
 
   const transformImage = (fn) => {
     const img = imgRef.current; if (!img) return
+    saveImageState()
     const offscreen = document.createElement('canvas')
     const octx = offscreen.getContext('2d')
     fn(offscreen, octx, img)
@@ -481,6 +613,7 @@ export default function App() {
 
   const applyCrop = () => {
     const crop = cropRef.current; if (!crop || crop.w < 4 || crop.h < 4) return
+    saveImageState()
     // First render clean (with effects baked in)
     selectedIdRef.current = null; cropRef.current = null; render({ showUI: false })
     const canvas = canvasRef.current, ctx = canvas.getContext('2d')
@@ -498,6 +631,106 @@ export default function App() {
     newImg.src = offscreen.toDataURL()
   }
   const cancelCrop = () => { cropRef.current = null; setCropping(false); forceUpdate(n => n + 1) }
+
+  const detectFaces = async () => {
+    if (!imgRef.current || detecting) return
+    if (!hasFaceDetector) {
+      setDetectMsg('Enable chrome://flags/#enable-experimental-web-platform-features and restart Chrome')
+      return
+    }
+    setDetecting('faces'); setDetectMsg(null)
+    try {
+      const detector = new window.FaceDetector({ maxDetectedFaces: 20, fastMode: false })
+      const img = imgRef.current
+      const allBoxes = []
+      // Detect at multiple scales to catch faces the OS misses
+      const scales = [1, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 1.1, 1.2, 1.3, 1.5, 1.7, 2, 2.5, 3]
+      for (const scale of scales) {
+        const w = Math.round(img.width * scale), h = Math.round(img.height * scale)
+        if (w < 10 || h < 10 || w > 8000 || h > 8000) continue
+        const work = document.createElement('canvas')
+        work.width = w; work.height = h
+        const wctx = work.getContext('2d')
+        wctx.drawImage(img, 0, 0, w, h)
+        // Mask already-found faces so detector finds new ones
+        for (const b of allBoxes) {
+          wctx.fillStyle = '#888'
+          wctx.fillRect(b.x * scale, b.y * scale, b.w * scale, b.h * scale)
+        }
+        for (let pass = 0; pass < 5; pass++) {
+          const bitmap = await createImageBitmap(work)
+          const results = await detector.detect(bitmap)
+          bitmap.close()
+          if (results.length === 0) break
+          for (const r of results) {
+            const box = { x: r.boundingBox.x / scale, y: r.boundingBox.y / scale, w: r.boundingBox.width / scale, h: r.boundingBox.height / scale }
+            // Skip if overlaps an existing detection
+            const dominated = allBoxes.some(b => {
+              const ox = Math.max(0, Math.min(b.x + b.w, box.x + box.w) - Math.max(b.x, box.x))
+              const oy = Math.max(0, Math.min(b.y + b.h, box.y + box.h) - Math.max(b.y, box.y))
+              return (ox * oy) > Math.min(b.w * b.h, box.w * box.h) * 0.3
+            })
+            if (!dominated) allBoxes.push(box)
+            wctx.fillStyle = '#888'
+            wctx.fillRect(r.boundingBox.x, r.boundingBox.y, r.boundingBox.width, r.boundingBox.height)
+          }
+        }
+      }
+      if (allBoxes.length === 0) { setDetectMsg('No faces found'); setDetecting(null); return }
+      const newRegions = allBoxes.map(b => ({
+        id: String(nextId++),
+        x: b.x - b.w * 0.1, y: b.y - b.h * 0.1,
+        w: b.w * 1.2, h: b.h * 1.2,
+        mode, shape, blurAmount, chunky, chunkSize, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
+      }))
+      commitRegions([...regionsRef.current, ...newRegions])
+      setDetectMsg(`${allBoxes.length} face${allBoxes.length > 1 ? 's' : ''} found`)
+    } catch (err) {
+      setDetectMsg('Face detection failed')
+    }
+    setDetecting(null)
+  }
+
+  const detectText = async () => {
+    if (!imgRef.current || detecting) return
+    setDetecting('text'); setDetectMsg(null)
+    try {
+      const { createWorker } = await import('tesseract.js')
+      const worker = await createWorker('eng')
+      // Pass data URL for maximum compatibility
+      const offscreen = document.createElement('canvas')
+      offscreen.width = imgRef.current.width; offscreen.height = imgRef.current.height
+      offscreen.getContext('2d').drawImage(imgRef.current, 0, 0)
+      const dataUrl = offscreen.toDataURL('image/png')
+      const result = await worker.recognize(dataUrl, {}, { blocks: true })
+      await worker.terminate()
+      const words = []
+      for (const block of result.data.blocks || [])
+        for (const para of block.paragraphs || [])
+          for (const line of para.lines || [])
+            for (const word of line.words || [])
+              words.push(word)
+      const emailRegex = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/
+      const matches = words.filter(w => emailRegex.test(w.text))
+      if (matches.length === 0) { setDetectMsg('No emails found'); setDetecting(null); return }
+      const newRegions = matches.map(w => {
+        const b = w.bbox
+        const pad = 4
+        return {
+          id: String(nextId++),
+          x: b.x0 - pad, y: b.y0 - pad,
+          w: b.x1 - b.x0 + pad * 2, h: b.y1 - b.y0 + pad * 2,
+          mode, shape, blurAmount, chunky, chunkSize, seed: Math.floor(Math.random() * 2 ** 32), rotation: 0,
+        }
+      })
+      commitRegions([...regionsRef.current, ...newRegions])
+      setDetectMsg(`${matches.length} email${matches.length > 1 ? 's' : ''} found`)
+    } catch (err) {
+      console.error('Tesseract OCR error:', err)
+      setDetectMsg('Text detection failed')
+    }
+    setDetecting(null)
+  }
 
   return (
     <>
@@ -556,13 +789,30 @@ export default function App() {
               </button>
             </div>
             <div className="sep" />
-            <button onClick={() => { setCropping(true); setSelectedId(null); cropRef.current = null; setMenuOpen(false) }} disabled={!loaded || cropping} title="Crop">Crop</button>
+            <button onClick={() => { setCropping(true); setSelectedId(null); cropRef.current = null }} disabled={!loaded || cropping} title="Crop">Crop</button>
             {cropping && (
               <>
                 <button className="primary" onClick={() => { applyCrop(); setMenuOpen(false) }} disabled={!cropRef.current}>Apply Crop</button>
                 <button onClick={() => { cancelCrop(); setMenuOpen(false) }}>Cancel</button>
               </>
             )}
+            <div className="sep" />
+            <button onClick={detectFaces} disabled={!loaded || !!detecting} title="Auto-detect faces" className={detecting === 'faces' ? 'detecting' : ''}>
+              {detecting === 'faces' && <span className="spinner" />}
+              {detecting === 'faces' ? 'Detecting...' : 'Detect Faces'}
+            </button>
+            <button onClick={detectText} disabled={!loaded || !!detecting} title="Auto-detect email addresses (OCR)" className={detecting === 'text' ? 'detecting' : ''}>
+              {detecting === 'text' && <span className="spinner" />}
+              {detecting === 'text' ? 'Scanning...' : 'Detect Emails'}
+            </button>
+            <button
+              disabled={!loaded || regionsRef.current.length === 0}
+              title="Show original (hold Alt)"
+              onMouseDown={() => { showOriginalRef.current = true; render({ showOriginal: true }) }}
+              onMouseUp={() => { showOriginalRef.current = false; render() }}
+              onMouseLeave={() => { if (showOriginalRef.current) { showOriginalRef.current = false; render() } }}
+            >Before/After</button>
+            {detectMsg && <span className="detect-msg">{detectMsg}</span>}
             <div className="sep" />
             <button onClick={clear} disabled={!loaded} title="Reset all changes">Clear</button>
             <button onClick={removeImage} disabled={!loaded} title="Remove image">Delete</button>
@@ -578,7 +828,7 @@ export default function App() {
               <div className="label">Drop an image file here</div>
               <div className="sub">or click to browse</div>
             </div>
-            <div className="privacy-note"><span className="lock">&#128274;</span> Your images never leave your device. All processing happens locally in your browser. <a href="https://github.com/creativar/blurrr" target="_blank" rel="noopener noreferrer">View source</a></div>
+            <div className="privacy-note"><span className="lock">&#128274;</span> Your images never leave your device. All processing happens locally. EXIF metadata is stripped on save. <a href="https://github.com/creativar/blurrr" target="_blank" rel="noopener noreferrer">View source</a></div>
           </div>
         )}
         <canvas ref={canvasRef} style={{ display: loaded ? 'block' : 'none', touchAction: 'none' }}
@@ -588,7 +838,7 @@ export default function App() {
         />
       </div>
 
-      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { if (e.target.files[0]) loadFile(e.target.files[0]) }} />
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onClick={(e) => { e.target.value = '' }} onChange={(e) => { if (e.target.files[0]) loadFile(e.target.files[0]) }} />
 
       {showAbout && (
         <div className="modal-overlay" onClick={() => setShowAbout(false)}>
@@ -602,6 +852,7 @@ export default function App() {
             <div className="modal-section">
               <h3>Privacy</h3>
               <p>blurrr does not send your images to a server. All image processing happens locally in your browser. Your files never leave your device.</p>
+              <p>Saved images have all EXIF metadata (location, camera info, timestamps) automatically stripped.</p>
             </div>
             <div className="modal-section">
               <h3>How does it work?</h3>
@@ -616,11 +867,13 @@ export default function App() {
             <div className="modal-section">
               <h3>How to use</h3>
               <ol>
-                <li>Open or drop an image</li>
+                <li>Open, drop, or paste (<strong>Ctrl+V</strong>) an image</li>
                 <li>Pick a mode: <strong>Blur</strong>, <strong>Redact</strong>, or <strong>Erase</strong></li>
                 <li>Pick a shape and drag to create regions</li>
+                <li>Use <strong>Detect Faces</strong> or <strong>Detect Emails</strong> to auto-find sensitive areas</li>
                 <li>Click a region to select it — drag to move, use handles to resize, or click the red button to delete</li>
-                <li>Save the result</li>
+                <li>Hold <strong>Alt</strong> to preview the original image</li>
+                <li>Save the result (EXIF metadata is automatically removed)</li>
               </ol>
             </div>
             <div className="modal-section">

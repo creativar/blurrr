@@ -1,9 +1,9 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import Plausible from '@plausible-analytics/tracker'
+import { init } from '@plausible-analytics/tracker'
 import App from './App'
 import './index.css'
 
-Plausible({ domain: 'blurrr.it' }).enableAutoPageviews()
+init({ domain: 'blurrr.it' })
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />)
