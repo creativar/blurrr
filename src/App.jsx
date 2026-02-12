@@ -762,6 +762,19 @@ export default function App() {
               <option value="ellipse">Ellipse</option>
             </select>
           </div>
+          <div className="toolbar-dropdown">
+            {detecting && <span className="spinner" />}
+            <select disabled={!loaded || !!detecting} value="" onChange={(e) => {
+              const v = e.target.value; e.target.value = ''
+              if (v === 'faces') detectFaces()
+              else if (v === 'emails') detectText()
+            }}>
+              <option value="" disabled>{detecting ? 'Scanning...' : 'Auto Detect'}</option>
+              <option value="faces">Detect Faces</option>
+              <option value="emails">Detect Emails</option>
+            </select>
+          </div>
+          {detectMsg && <span className="detect-msg">{detectMsg}</span>}
           <button className="menu-toggle" onClick={() => setMenuOpen(v => !v)} title="More options">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
           </button>
@@ -807,18 +820,6 @@ export default function App() {
               </>
             )}
             <div className="sep" />
-            <div className="toolbar-dropdown">
-              {detecting && <span className="spinner" />}
-              <select disabled={!loaded || !!detecting} value="" onChange={(e) => {
-                const v = e.target.value; e.target.value = ''
-                if (v === 'faces') detectFaces()
-                else if (v === 'emails') detectText()
-              }}>
-                <option value="" disabled>{detecting ? 'Scanning...' : 'Auto Detect'}</option>
-                <option value="faces">Detect Faces</option>
-                <option value="emails">Detect Emails</option>
-              </select>
-            </div>
             <button
               disabled={!loaded || regionsRef.current.length === 0}
               title="Show original (hold Alt)"
@@ -826,7 +827,6 @@ export default function App() {
               onMouseUp={() => { showOriginalRef.current = false; render() }}
               onMouseLeave={() => { if (showOriginalRef.current) { showOriginalRef.current = false; render() } }}
             >Before/After</button>
-            {detectMsg && <span className="detect-msg">{detectMsg}</span>}
             <div className="sep" />
             <button onClick={clear} disabled={!loaded} title="Reset all changes">Clear</button>
             <button onClick={removeImage} disabled={!loaded} title="Remove image">Delete</button>

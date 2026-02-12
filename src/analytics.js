@@ -1,7 +1,7 @@
 import { init, track as _track } from '@plausible-analytics/tracker'
 
 const domain = import.meta.env.VITE_PLAUSIBLE_DOMAIN
-if (domain) init({ domain })
+if (domain) init({ domain, endpoint: '/api/event' })
 
 const track = domain ? _track : () => {}
 export { track }
