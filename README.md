@@ -16,9 +16,15 @@ Don't want to host it yourself? **Use it here: [blurrr.it](https://blurrr.it/)**
 - **Multiple shapes** — Rectangle, rounded rectangle, or ellipse
 - **Adjustable blur** — Control strength and optional chunky/pixelated mode
 - **Region editing** — Move, resize, rotate, and delete individual regions
-- **Image transforms** — Rotate, flip, and crop
+- **Image transforms** — Rotate, flip, and crop (all undoable)
 - **Undo/Redo** — Full history with keyboard shortcuts (Ctrl+Z / Ctrl+Shift+Z)
 - **Drag & drop** — Drop an image onto the page or click to browse
+- **Clipboard paste** — Paste screenshots directly with Ctrl+V / Cmd+V
+- **Face detection** — Auto-detect and blur faces (Chrome/Edge with experimental flag)
+- **Email detection** — OCR-powered auto-detection of email addresses via Tesseract.js
+- **Before/after toggle** — Hold Alt or press the button to preview the original image
+- **EXIF stripping** — Saved images have all metadata (location, camera, timestamps) removed
+- **Cross-browser blur** — Fallback blur for Safari/iOS browsers without `ctx.filter` support
 
 ## Use cases
 
@@ -46,7 +52,7 @@ Output goes to `dist/`.
 
 ## Tech
 
-React 19, Vite, Canvas API. Zero backend.
+React 19, Vite, Canvas API, Tesseract.js (lazy-loaded). Zero backend.
 
 ## Analytics
 
